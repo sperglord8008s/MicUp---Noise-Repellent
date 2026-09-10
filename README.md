@@ -1,14 +1,13 @@
 <div align="center">
 
-# 🎙️ MicUp
+# 🎙️ MicUp NR. this may be AI slip I am not a programmer!!!
 
-**Real-time microphone audio processing for Android**
+**MicUp with learned-noise subtraction built in for ARM64 Android**
 
-[![Release](https://img.shields.io/github/v/release/papergray/MicUp?style=flat-square&color=blue)](https://github.com/papergray/MicUp/releases/latest)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green?style=flat-square&logo=android)](https://github.com/papergray/MicUp/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-[Download APK](https://github.com/papergray/MicUp/releases/latest) · [Report Bug](https://github.com/papergray/MicUp/issues)
+[Phone setup guide](MICUP_NR_GUIDE.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 </div>
 
@@ -16,7 +15,12 @@
 
 ## What is MicUp?
 
-MicUp is a real-time microphone processing app for Android. It captures your mic input, runs it through a DSP effects chain, and routes the processed audio to a virtual microphone — so every app on your phone (Discord, Teams, Zoom, WhatsApp, etc.) hears the cleaned-up, processed version of your voice.
+MicUp NR is a custom fork of MicUp for live listening with a USB stethoscope
+microphone. It captures a manual background-noise profile, subtracts it with
+libspecbleach (the DSP engine behind Noise Repellent), then applies adjustable
+listen gain. The desktop Debian/LV2 binary is not used or required.
+
+This is an experimental listening tool, not a medical device.
 
 No PC required. No monthly subscription.
 
@@ -24,6 +28,9 @@ No PC required. No monthly subscription.
 
 ## Features
 
+-  **Learned-noise subtraction** — three-second manual profile capture, reduction, smoothing, signal protection, and residual-listen controls
+-  **Stethoscope listen gain** — smoothed post-denoiser gain with bounded output
+-  **USB input and Bluetooth output selection** — remembers both routes and clears stale profiles when the microphone changes
 -  **Built-in DSP chain** — Noise Gate, 10-band EQ, Compressor, Reverb, Pitch Shifter
 -  **Plugin support** — Load LV2, CLAP, and VST3 native plugins (`.so`, `.clap`, `.lv2`)
 -  **Open plugin files** — Tap a plugin file in your file manager to import it directly
@@ -38,7 +45,9 @@ No PC required. No monthly subscription.
 
 ## Download
 
-Grab the latest signed APK from the [Releases page](https://github.com/papergray/MicUp/releases/latest).
+Use the ARM64 APK supplied with this source snapshot. It has the separate
+package id `com.micplugin.noiserepellent`, so it can coexist with upstream
+MicUp.
 
 No Play Store. No sign-in. Just install and go.
 
@@ -48,11 +57,14 @@ No Play Store. No sign-in. Just install and go.
 
 ## How to Use
 
-1. Install the APK
-2. Grant microphone permission when prompted
-3. Tap the **power button** to start audio processing
-4. Adjust effects with the sliders and knobs
-5. In your call/meeting app, select **MicUp** or the VoIP audio stream as your microphone
+1. Install the APK and grant microphone permission.
+2. Connect the USB microphone and Bluetooth/wired headphones.
+3. In Settings, choose the USB **Input Device** and headphone **Monitor Output Device**.
+4. Under **Noise Repellent · Built in**, capture three seconds of unwanted noise.
+5. Wait for **PROFILE READY**, then raise **Listen gain** gradually.
+
+See [MICUP_NR_GUIDE.md](MICUP_NR_GUIDE.md) for the exact Ulefone setup and
+troubleshooting steps.
 
 ### Loading Plugins
 
@@ -72,12 +84,14 @@ Shizuku gives MicUp ADB-level access for better audio routing:
 
 ## Building from Source
 
-**Requirements:** Android Studio, NDK 26, CMake 3.22, JDK 17
+**Requirements:** Android Studio/Gradle 8.6, Android SDK 34, NDK
+26.3.11579264, CMake 3.22.1, and JDK 17. The supplied source archive includes
+the pinned native dependencies under `third_party/`; a Git checkout fetches
+the same exact revisions automatically when that directory is absent.
 
 ```bash
-git clone https://github.com/papergray/MicUp.git
-cd MicUp
-./gradlew assembleDebug
+cd MicUp-NoiseRepellent
+RELEASE_TAG=v1.0.0 ./gradlew assembleDebug
 ```
 
 APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
@@ -98,7 +112,7 @@ APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
 ## Requirements
 
 - Android 8.0+ (API 26)
-- ARM64, ARMv7, or x86_64
+- ARM64 (`arm64-v8a`)
 - Microphone permission
 - For Shizuku tier: Android 11+
 - For Root tier: Magisk
@@ -107,10 +121,13 @@ APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MicUp code is MIT licensed — see [LICENSE](LICENSE). The built-in
+libspecbleach DSP is LGPL-2.1-or-later and Oboe is Apache-2.0. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the license copies under
+`app/src/main/assets/licenses/`.
 
 ---
 
 <div align="center">
-Made for Android · Built with Oboe, C++17, Jetpack Compose
+Made for Android · Built with libspecbleach, Oboe, C++17, and Jetpack Compose
 </div>
