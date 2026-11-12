@@ -1,6 +1,7 @@
 #pragma once
 
 #include <oboe/Oboe.h>
+#include <specbleach_denoiser.h>
 #include <atomic>
 #include <array>
 #include <vector>
@@ -53,15 +54,50 @@ private:
 
 // ─── Atomic parameter block (UI→Audio thread) ────────────────────────────────
 struct EffectParams {
+    // Noise Repellent / libspecbleach (manual learned-noise mode)
+    std::atomic<bool>  noiseRepellentEnabled{true};
+    std::atomic<bool>  noiseLearning{false};
+    std::atomic<float> noiseReductionDb{18.0f};
+    std::atomic<float> noiseSmoothing{0.35f};
+    std::atomic<int>   noiseSmoothingMode{SPECBLEACH_SMOOTHING_BM3D};
+    std::atomic<float> noiseDfttStrength{1.0f};
+    std::atomic<float> noiseMasking{0.7f};
+    std::atomic<float> noiseWhitening{0.0f};
+    std::atomic<float> noiseSuppressionStrength{1.0f};
+    std::atomic<float> noiseAggressiveness{0.5f};
+    std::atomic<float> noiseProfileOffsetDb{0.0f};
+    std::atomic<float> noiseTonalProfileOffsetDb{0.0f};
+    std::atomic<float> noiseTonalReductionDb{18.0f};
+    std::atomic<bool>  noiseAdaptive{false};
+    std::atomic<int>   noiseEstimatorMethod{SPECBLEACH_NOISE_ESTIMATION_SPP_MMSE};
+    std::atomic<int>   noiseQualityMode{1}; // 0=live, 1=balanced, 2=studio
+    std::atomic<bool>  noiseCurveEnabled{false};
+    std::atomic<float> noiseCurveBiasDb[10];
+    std::atomic<bool>  noiseResidualListen{false};
+    std::atomic<bool>  noiseTransientProtection{true};
+    std::atomic<float> noiseOutputGainDb{10.0f};
+    std::atomic<bool>  noiseParamsDirty{true};
+    std::atomic<bool>  noiseProfileReady{false};
+    std::atomic<bool>  noiseEngineReady{false};
+    std::atomic<uint32_t> noiseLatencyFrames{0};
+    std::atomic<uint32_t> noiseFrameSize{0};
+    std::atomic<uint32_t> noiseFftSize{0};
+    std::atomic<uint32_t> noiseHopSize{0};
+    std::atomic<uint32_t> noiseProfileSize{0};
+    std::atomic<uint32_t> noiseProfileBlocks{0};
+    std::atomic<bool>  noiseTransientDetected{false};
+    std::atomic<float> noiseTransientIntensity{0.0f};
+    std::atomic<float> noiseTonalPeaksHz[4];
+
     // NoiseGate
     std::atomic<float> gateThresholdDb{-50.0f};
     std::atomic<float> gateAttackMs{5.0f};
     std::atomic<float> gateReleaseMs{150.0f};
-    std::atomic<bool>  gateEnabled{true};
+    std::atomic<bool>  gateEnabled{false};
 
     // Equalizer — 10 bands: 31,63,125,250,500,1k,2k,4k,8k,16kHz
     std::atomic<float> eqGain[10];   // initialized in constructor
-    std::atomic<bool>  eqEnabled{true};
+    std::atomic<bool>  eqEnabled{false};
 
     // Compressor
     std::atomic<float> compThresholdDb{-18.0f};
@@ -69,7 +105,7 @@ struct EffectParams {
     std::atomic<float> compAttackMs{10.0f};
     std::atomic<float> compReleaseMs{100.0f};
     std::atomic<float> compMakeupDb{0.0f};
-    std::atomic<bool>  compEnabled{true};
+    std::atomic<bool>  compEnabled{false};
 
     // Reverb
     std::atomic<float> reverbMix{0.0f};
@@ -85,6 +121,10 @@ struct EffectParams {
     std::atomic<float> inputLevelDb{-100.0f};
     std::atomic<float> outputLevelDb{-100.0f};
     std::atomic<float> gainReductionDb{0.0f};
+    std::atomic<float> inputPeakDb{-100.0f};
+    std::atomic<float> inputDcOffset{0.0f};
+    std::atomic<float> inputClipPercent{0.0f};
+    std::atomic<uint32_t> inputShortReadCount{0};
 
     // Master bypass
     std::atomic<bool>  masterBypass{false};
@@ -97,7 +137,39 @@ struct EffectParams {
 
     EffectParams() {
         for (auto& g : eqGain) g.store(0.0f, std::memory_order_relaxed);
+        for (auto& b : noiseCurveBiasDb) b.store(0.0f, std::memory_order_relaxed);
+        for (auto& peak : noiseTonalPeaksHz) peak.store(0.0f, std::memory_order_relaxed);
     }
+};
+
+// ─── Optional lock-free spectrum analyzer ───────────────────────────────────
+// The FFT runs only while the spectrum panel is visible. All storage is fixed
+// at construction time, so the real-time callback never allocates or locks.
+class SpectrumAnalyzer {
+public:
+    // 4096 points gives ~11.7 Hz resolution at 48 kHz, which keeps the
+    // 20-250 Hz stethoscope range genuinely useful rather than decorative.
+    static constexpr int kFftSize = 4096;
+    static constexpr int kBinCount = kFftSize / 2 + 1;
+
+    SpectrumAnalyzer();
+    bool process(const float* samples, int32_t frameCount);
+    void copyPublished(float* destination) const;
+    uint32_t generation() const { return generation_.load(std::memory_order_acquire); }
+
+private:
+    void transformAndPublish();
+
+    alignas(64) std::array<float, kFftSize> input_{};
+    alignas(64) std::array<float, kFftSize> real_{};
+    alignas(64) std::array<float, kFftSize> imag_{};
+    alignas(64) std::array<float, kFftSize> window_{};
+    alignas(64) std::array<float, kFftSize / 2> twiddleReal_{};
+    alignas(64) std::array<float, kFftSize / 2> twiddleImag_{};
+    alignas(64) std::array<float, kBinCount> smoothed_{};
+    std::array<std::atomic<float>, kBinCount> published_{};
+    std::atomic<uint32_t> generation_{0};
+    int inputCount_ = 0;
 };
 
 // ─── Biquad filter (Direct-Form II Transposed) ───────────────────────────────
@@ -167,17 +239,22 @@ public:
     int32_t getInputSessionId() const { return inputStream_ ? inputStream_->getSessionId() : -1; }
     int32_t framesPerBurst() const { return framesPerBurst_; }
 
+    void setSpectrumEnabled(bool enabled) {
+        spectrumEnabled_.store(enabled, std::memory_order_release);
+    }
+    void copySpectrumSnapshot(float* destination) const;
+    void setNoiseQualityMode(int mode);
+    void setNoiseEstimatorMethod(int method);
+
+    // Rebuilds only the learned profile. If audio is live, the streams are
+    // stopped first so libspecbleach setup-only APIs never race the callback.
+    void resetNoiseRepellentProfile();
+
     // Preferred input device (Android AudioDeviceInfo id), oboe::kUnspecified (-1) = system default.
     // Fixes #5: previously the input stream always opened on whatever the OS considered the
     // default mic, so an external/USB sound card's input could never be selected even though
     // its output could. Safe to call while running — reopens the streams to apply.
-    void setInputDeviceId(int32_t deviceId) {
-        inputDeviceId_.store(deviceId, std::memory_order_relaxed);
-        if (running_.load(std::memory_order_acquire)) {
-            closeStreams();
-            openStreams();
-        }
-    }
+    void setInputDeviceId(int32_t deviceId, bool communicationRoute);
     int32_t getInputDeviceId() const { return inputDeviceId_.load(std::memory_order_relaxed); }
 
     // oboe callbacks
@@ -189,15 +266,23 @@ private:
     bool openStreams();
     void closeStreams();
     void rebuildEQ();
+    bool prepareNoiseRepellent();
+    bool loadNoiseRepellentParams(bool prewarmAdaptive = false);
+    void reconfigureNoiseRepellent();
+    void buildNoiseReductionCurve();
+    void publishNoiseDiagnostics();
 
     // DSP (all called from audio thread, no allocations)
     void processEffectsChain(float* buf, int32_t frames);
+    void dsp_noiseRepellent(float* buf, int32_t frames);
+    void dsp_outputGain(float* buf, int32_t frames);
     void dsp_noiseGate(float* buf, int32_t frames);
     void dsp_eq(float* buf, int32_t frames);
     void dsp_compressor(float* buf, int32_t frames);
     void dsp_reverb(float* buf, int32_t frames);
     void dsp_pitchShift(float* buf, int32_t frames);
-    void measureLevel(const float* buf, int32_t frames, std::atomic<float>& out);
+    void measureLevel(const float* buf, int32_t frames, std::atomic<float>& out,
+                      bool captureInputDiagnostics = false);
 
     static inline float dBToLin(float db) { return std::pow(10.0f, db * 0.05f); }
     static inline float linTodB(float lin) {
@@ -211,6 +296,9 @@ private:
     // Preferred input device id — see setInputDeviceId() above. oboe::kUnspecified means
     // "let the system pick", which preserves the original default behavior.
     std::atomic<int32_t> inputDeviceId_{oboe::kUnspecified};
+    // SCO/BLE capture must use Android's communication preset and a shared stream;
+    // raw/exclusive capture is commonly unsupported by Bluetooth HALs.
+    std::atomic<bool> communicationInput_{false};
 
     // Restart loop protection
     static constexpr int kMaxRestarts = 5;
@@ -227,6 +315,21 @@ private:
     // Params (UI writes, audio thread reads)
     EffectParams params_;
     PluginHost*  pluginHost_ = nullptr;
+
+    // Noise Repellent engine. Allocation and destruction happen only while
+    // streams are stopped; process() and parameter swaps run on the audio
+    // callback thread.
+    specbleach_denoiser* noiseDenoiser_ = nullptr;
+    uint32_t noiseDenoiserSampleRate_ = 0;
+    float outputGainSmoothed_ = 3.16227766f; // +10 dB
+    std::vector<float> noiseReductionCurve_;
+
+    // ReaFIR-style visualization. Atomic publication lets the UI copy a frame
+    // without ever touching live FFT work buffers.
+    std::atomic<bool> spectrumEnabled_{false};
+    SpectrumAnalyzer inputSpectrum_;
+    SpectrumAnalyzer outputSpectrum_;
+    std::array<std::atomic<float>, SpectrumAnalyzer::kBinCount> noiseSpectrum_{};
 
     // Work buffer
     static constexpr int kMaxFrames = 1024;

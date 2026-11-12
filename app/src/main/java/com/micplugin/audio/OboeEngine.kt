@@ -41,6 +41,21 @@ class OboeEngine @Inject constructor() {
     fun getLevels(): FloatArray =
         if (engineHandle != 0L) nativeGetLevels(engineHandle) else floatArrayOf(-100f, -100f, 0f)
 
+    fun getNoiseRepellentStatus(): FloatArray =
+        if (engineHandle != 0L) nativeGetNoiseRepellentStatus(engineHandle)
+        else floatArrayOf(0f, 0f, 0f)
+
+    fun getSpectrum(): FloatArray =
+        if (engineHandle != 0L) nativeGetSpectrum(engineHandle) else FloatArray(6150)
+
+    fun setSpectrumEnabled(enabled: Boolean) {
+        if (engineHandle != 0L) nativeSetSpectrumEnabled(engineHandle, enabled)
+    }
+
+    fun resetNoiseRepellentProfile() {
+        if (engineHandle != 0L) nativeResetNoiseRepellentProfile(engineHandle)
+    }
+
     fun loadPlugin(soPath: String, formatId: Int): Long =
         if (engineHandle != 0L) nativeLoadPlugin(engineHandle, soPath, formatId) else 0L
 
@@ -57,9 +72,11 @@ class OboeEngine @Inject constructor() {
         if (engineHandle != 0L) nativeSetInjectionMode(engineHandle, enabled)
     }
 
-    /** deviceId: an Android AudioDeviceInfo id, or -1 for the system default mic. */
-    fun setInputDevice(deviceId: Int) {
-        if (engineHandle != 0L) nativeSetInputDevice(engineHandle, deviceId)
+    /** deviceId: Android AudioDeviceInfo id, or -1 for default. */
+    fun setInputDevice(deviceId: Int, communicationRoute: Boolean = false) {
+        if (engineHandle != 0L) {
+            nativeSetInputDevice(engineHandle, deviceId, communicationRoute)
+        }
     }
 
     fun setMonitorCallback(callback: ((FloatArray, Int) -> Unit)?) {
@@ -87,13 +104,21 @@ class OboeEngine @Inject constructor() {
     private external fun nativeStop(handle: Long)
     private external fun nativeSetParam(handle: Long, effectId: Int, paramId: Int, value: Float)
     private external fun nativeGetLevels(handle: Long): FloatArray
+    private external fun nativeGetNoiseRepellentStatus(handle: Long): FloatArray
+    private external fun nativeGetSpectrum(handle: Long): FloatArray
+    private external fun nativeSetSpectrumEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeResetNoiseRepellentProfile(handle: Long)
     private external fun nativeLoadPlugin(handle: Long, soPath: String, formatId: Int): Long
     private external fun nativeUnloadPlugin(handle: Long, pluginHandle: Long)
     private external fun nativeSetPluginParam(handle: Long, pluginHandle: Long, paramId: Int, value: Float)
     private external fun nativeGetPluginParams(handle: Long, pluginHandle: Long): String
     private external fun nativeSetMonitorCallback(handle: Long, callback: Any?)
     private external fun nativeSetInjectionMode(handle: Long, enabled: Boolean)
-    private external fun nativeSetInputDevice(handle: Long, deviceId: Int)
+    private external fun nativeSetInputDevice(
+        handle: Long,
+        deviceId: Int,
+        communicationRoute: Boolean,
+    )
     private external fun nativeGetSampleRate(handle: Long): Int
     private external fun nativeGetInputSessionId(handle: Long): Int
     private external fun nativeGetFramesPerBurst(handle: Long): Int

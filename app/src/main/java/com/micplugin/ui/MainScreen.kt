@@ -31,6 +31,9 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
     val compState   by vm.compState.collectAsState()
     val reverbState by vm.reverbState.collectAsState()
     val pitchState  by vm.pitchState.collectAsState()
+    val noiseState  by vm.noiseRepellentState.collectAsState()
+    val noiseStatus by vm.noiseRepellentStatus.collectAsState()
+    val spectrum    by vm.spectrum.collectAsState()
     val bypass      by vm.masterBypass.collectAsState()
     val monitoring  by vm.monitoringEnabled.collectAsState()
     val presets     by vm.presets.collectAsState()
@@ -58,7 +61,7 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "MIC PLUGIN",
+                "MICUP NR",
                 style = MaterialTheme.typography.titleLarge,
                 color = StudioColors.TextPrimary,
                 fontWeight = FontWeight.Black,
@@ -136,7 +139,7 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
                 StatusPill("${status.sampleRate / 1000}kHz")
                 StatusPill("${status.framesPerBurst}fr")
                 StatusPill("~${status.latencyMs.toInt()}ms")
-                StatusPill("${pluginSlots.size} plugins")
+                StatusPill("NR +${(noiseStatus.latencyFrames * 1000f / status.sampleRate).toInt()}ms")
             }
         }
 
@@ -155,9 +158,16 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("MASTER BYPASS", style = MaterialTheme.typography.labelSmall,
-                    color = if (bypass) StudioColors.MeterAmber else StudioColors.TextMuted,
-                    letterSpacing = 1.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("MASTER BYPASS", style = MaterialTheme.typography.labelSmall,
+                        color = if (bypass) StudioColors.MeterAmber else StudioColors.TextMuted,
+                        letterSpacing = 1.sp)
+                    InfoButton(
+                        "Master bypass",
+                        "Passes the microphone around every built-in effect and external plugin. " +
+                            "Use it to compare processed and raw sound at the same input level.",
+                    )
+                }
                 Switch(checked = bypass, onCheckedChange = { vm.setMasterBypass(it) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = StudioColors.MeterAmber,
@@ -177,12 +187,19 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    Text(
-                        "Monitor Output",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = StudioColors.TextPrimary,
-                        letterSpacing = 1.sp,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Monitor Output",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StudioColors.TextPrimary,
+                            letterSpacing = 1.sp,
+                        )
+                        InfoButton(
+                            "Monitor output",
+                            "Controls whether you hear the processed microphone on the selected " +
+                                "headphones. Turning it off does not stop the virtual-mic route.",
+                        )
+                    }
                     Text(
                         if (monitoring) "Hearing yourself" else "Silent to you — still routed",
                         fontSize = 10.sp,
@@ -201,19 +218,30 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
             }
         }
 
+        NoiseRepellentCard(
+            vm = vm,
+            engineStatus = status,
+            state = noiseState,
+            status = noiseStatus,
+            spectrum = spectrum,
+            levels = levels,
+        )
+
         // ── Noise Gate ────────────────────────────────────────────────────────
         EffectCard(
             title   = "Noise Gate",
             enabled = gateState.enabled,
             onToggle = vm::setGateEnabled,
+            helpText = "Silences the signal when its level falls below the threshold. Useful for " +
+                "gaps, but a threshold set too high can cut quiet breaths or heart sounds.",
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ParamSlider("Threshold", gateState.thresholdDb, vm::setGateThreshold,
-                    -80f..-0f, " dB")
+                    -80f..-0f, " dB", helpText = "Level below which the gate closes. More negative is more sensitive and lets quieter sound through.")
                 ParamSlider("Attack", gateState.attackMs, vm::setGateAttack,
-                    0.1f..50f, " ms")
+                    0.1f..50f, " ms", helpText = "How quickly the gate opens after signal crosses the threshold. Short values preserve onsets.")
                 ParamSlider("Release", gateState.releaseMs, vm::setGateRelease,
-                    10f..500f, " ms")
+                    10f..500f, " ms", helpText = "How slowly the gate closes after signal falls. Longer values sound smoother but retain more background noise.")
             }
         }
 
@@ -222,6 +250,8 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
             title   = "10-Band EQ",
             enabled = eqState.enabled,
             onToggle = vm::setEqEnabled,
+            helpText = "Boosts or cuts ten frequency regions. Positive faders boost, negative " +
+                "faders cut. For a stethoscope, 31–500 Hz contains most low body sounds.",
         ) {
             val freqLabels = listOf("31","63","125","250","500","1k","2k","4k","8k","16k")
             Row(
@@ -250,15 +280,15 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
                     KnobWidget("THRESH", compState.thresholdDb, vm::setCompThreshold,
-                        -60f..0f, unit = "dB")
+                        -60f..0f, unit = "dB", helpText = "Level above which compression begins.")
                     KnobWidget("RATIO", compState.ratio, vm::setCompRatio,
-                        1f..20f, unit = ":1")
+                        1f..20f, unit = ":1", helpText = "How strongly levels above threshold are reduced. 1:1 does nothing.")
                     KnobWidget("ATTACK", compState.attackMs, vm::setCompAttack,
-                        0.1f..100f, unit = "ms")
+                        0.1f..100f, unit = "ms", helpText = "How quickly compression catches a loud onset.")
                     KnobWidget("RELEASE", compState.releaseMs, vm::setCompRelease,
-                        10f..1000f, unit = "ms")
+                        10f..1000f, unit = "ms", helpText = "How quickly gain returns after the signal falls.")
                     KnobWidget("MAKEUP", compState.makeupDb, vm::setCompMakeup,
-                        0f..24f, unit = "dB")
+                        0f..24f, unit = "dB", helpText = "Gain added after compression. Raise cautiously to avoid clipping.")
                 }
                 // GR readout
                 val gr = levels.gainReductionDb
@@ -272,11 +302,16 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
             title   = "Reverb",
             enabled = reverbState.enabled,
             onToggle = vm::setReverbEnabled,
+            helpText = "Adds simulated room reflections. Normally leave this off for diagnostic " +
+                "listening because it can obscure timing and fine detail.",
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ParamSlider("Mix", reverbState.mix, vm::setReverbMix, 0f..1f)
-                ParamSlider("Room Size", reverbState.roomSize, vm::setReverbRoom, 0f..1f)
-                ParamSlider("Damping", reverbState.damping, vm::setReverbDamp, 0f..1f)
+                ParamSlider("Mix", reverbState.mix, vm::setReverbMix, 0f..1f,
+                    helpText = "Balance between dry input and reverberated sound.")
+                ParamSlider("Room Size", reverbState.roomSize, vm::setReverbRoom, 0f..1f,
+                    helpText = "Length and density of the simulated reflections.")
+                ParamSlider("Damping", reverbState.damping, vm::setReverbDamp, 0f..1f,
+                    helpText = "How quickly high frequencies fade in the reverb tail.")
             }
         }
 
@@ -285,9 +320,11 @@ fun MainScreen(navController: NavController, vm: AudioViewModel = hiltViewModel(
             title   = "Pitch Shifter",
             enabled = pitchState.enabled,
             onToggle = vm::setPitchEnabled,
+            helpText = "Changes pitch using a granular delay. It adds coloration and is intended " +
+                "as an effect, not transparent clinical monitoring.",
         ) {
             ParamSlider("Semitones", pitchState.semitones, vm::setPitchSemitones,
-                -12f..12f, " st")
+                -12f..12f, " st", helpText = "Pitch shift in musical semitones. Zero leaves pitch unchanged.")
         }
 
         // ── Plugin Chain ─────────────────────────────────────────────────────

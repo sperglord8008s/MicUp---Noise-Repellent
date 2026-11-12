@@ -75,7 +75,6 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(permissionsToRequest)
         // Handle file opened from file manager
         handleIncomingPlugin(intent)
-        requestAllFilesPermission()
         setContent {
             MicPluginTheme {
                 val navController = rememberNavController()

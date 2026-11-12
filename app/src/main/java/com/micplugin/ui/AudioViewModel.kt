@@ -4,36 +4,42 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.micplugin.audio.AudioEngine
 import com.micplugin.audio.AudioLevels
+import com.micplugin.audio.NoiseRepellentStatus
+import com.micplugin.audio.SpectrumFrame
 import com.micplugin.plugin.*
 import com.micplugin.preset.EffectState
 import com.micplugin.preset.Preset
 import com.micplugin.preset.PresetManager
 import com.micplugin.plugin.PluginPathPrefs
 import com.micplugin.service.ShizukuManager
+import com.micplugin.service.AudioProcessingService
+import com.micplugin.service.AudioRouteDiagnostics
 import com.micplugin.service.SoftwareLoopback
 import com.micplugin.service.ShizukuState
 import com.micplugin.service.VirtualMicService
 import com.micplugin.service.VirtualMicTier
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
 
 data class GateState(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val thresholdDb: Float = -50f,
     val attackMs: Float = 5f,
     val releaseMs: Float = 150f,
 )
 
 data class EqState(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val bands: List<Float> = List(10) { 0f },
 )
 
 data class CompState(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val thresholdDb: Float = -18f,
     val ratio: Float = 4f,
     val attackMs: Float = 10f,
@@ -53,6 +59,31 @@ data class PitchState(
     val semitones: Float = 0f,
 )
 
+data class NoiseRepellentState(
+    val enabled: Boolean = true,
+    val learning: Boolean = false,
+    val secondsRemaining: Int = 0,
+    val reductionDb: Float = 18f,
+    val tonalReductionDb: Float = 18f,
+    val outputGainDb: Float = 10f,
+    val smoothingPercent: Float = 35f,
+    val smoothingMode: Int = 3,
+    val dfttStrength: Float = 1f,
+    val signalProtectionPercent: Float = 70f,
+    val whiteningPercent: Float = 0f,
+    val suppressionPercent: Float = 100f,
+    val aggressiveness: Float = 0.5f,
+    val profileOffsetDb: Float = 0f,
+    val tonalProfileOffsetDb: Float = 0f,
+    val adaptiveNoise: Boolean = false,
+    val estimatorMethod: Int = 0,
+    val qualityMode: Int = 1,
+    val curveEnabled: Boolean = false,
+    val curveBandsDb: List<Float> = List(10) { 0f },
+    val residualListen: Boolean = false,
+    val transientProtection: Boolean = true,
+)
+
 @HiltViewModel
 class AudioViewModel @Inject constructor(
     private val audioEngine: AudioEngine,
@@ -70,12 +101,18 @@ class AudioViewModel @Inject constructor(
     val presets:     StateFlow<List<Preset>>   = presetManager.presets
     val virtualMicTier: StateFlow<VirtualMicTier> = virtualMicService.activeTier
     val shizukuState: StateFlow<ShizukuState> = shizukuManager.state
+    val noiseRepellentStatus: StateFlow<NoiseRepellentStatus> =
+        audioEngine.noiseRepellentStatus
+    val spectrum: StateFlow<SpectrumFrame> = audioEngine.spectrum
+    val audioRouteStatus = AudioRouteDiagnostics.status
+    val audioRouteEvents = AudioRouteDiagnostics.events
 
     private val _gateState   = MutableStateFlow(GateState())
     private val _eqState     = MutableStateFlow(EqState())
     private val _compState   = MutableStateFlow(CompState())
     private val _reverbState = MutableStateFlow(ReverbState())
     private val _pitchState  = MutableStateFlow(PitchState())
+    private val _noiseRepellentState = MutableStateFlow(NoiseRepellentState())
     private val _masterBypass = MutableStateFlow(false)
 
     val gateState:    StateFlow<GateState>    = _gateState
@@ -83,10 +120,12 @@ class AudioViewModel @Inject constructor(
     val compState:    StateFlow<CompState>    = _compState
     val reverbState:  StateFlow<ReverbState>  = _reverbState
     val pitchState:   StateFlow<PitchState>   = _pitchState
+    val noiseRepellentState: StateFlow<NoiseRepellentState> = _noiseRepellentState
     val masterBypass: StateFlow<Boolean>      = _masterBypass
 
     private val _selectedPreset = MutableStateFlow<Preset?>(null)
     val selectedPreset: StateFlow<Preset?> = _selectedPreset
+    private var noiseLearnJob: Job? = null
 
     init {
         viewModelScope.launch { presetManager.loadAll() }
@@ -103,10 +142,172 @@ class AudioViewModel @Inject constructor(
     // ── Engine control ─────────────────────────────────────────────────────────
     fun toggleEngine(context: android.content.Context) {
         if (engineStatus.value.isRunning) {
+            cancelNoiseLearning()
             com.micplugin.service.AudioProcessingService.stop(context)
         } else {
             com.micplugin.service.AudioProcessingService.start(context)
         }
+    }
+
+    // ── Noise Repellent ──────────────────────────────────────────────────────
+    fun setNoiseRepellentEnabled(on: Boolean) {
+        if (!on && _noiseRepellentState.value.learning) cancelNoiseLearning()
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(enabled = on)
+        audioEngine.setNoiseRepellentEnabled(on)
+    }
+
+    fun toggleNoiseLearning() {
+        if (_noiseRepellentState.value.learning) {
+            cancelNoiseLearning()
+            return
+        }
+        if (!engineStatus.value.isRunning) return
+
+        noiseLearnJob?.cancel()
+        setMasterBypass(false)
+        setNoiseRepellentEnabled(true)
+        audioEngine.resetNoiseRepellentProfile()
+        audioEngine.setNoiseLearning(true)
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(
+            learning = true,
+            secondsRemaining = 3,
+        )
+        noiseLearnJob = viewModelScope.launch {
+            for (remaining in 3 downTo 1) {
+                _noiseRepellentState.value = _noiseRepellentState.value.copy(
+                    secondsRemaining = remaining,
+                )
+                delay(1000)
+            }
+            audioEngine.setNoiseLearning(false)
+            _noiseRepellentState.value = _noiseRepellentState.value.copy(
+                learning = false,
+                secondsRemaining = 0,
+            )
+        }
+    }
+
+    fun cancelNoiseLearning() {
+        noiseLearnJob?.cancel()
+        noiseLearnJob = null
+        audioEngine.setNoiseLearning(false)
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(
+            learning = false,
+            secondsRemaining = 0,
+        )
+    }
+
+    fun resetNoiseProfile() {
+        cancelNoiseLearning()
+        audioEngine.resetNoiseRepellentProfile()
+    }
+
+    fun setNoiseReduction(db: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(reductionDb = db)
+        audioEngine.setNoiseReduction(db)
+    }
+
+    fun setNoiseTonalReduction(db: Float) {
+        _noiseRepellentState.value =
+            _noiseRepellentState.value.copy(tonalReductionDb = db)
+        audioEngine.setNoiseTonalReduction(db)
+    }
+
+    fun setNoiseOutputGain(db: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(outputGainDb = db)
+        audioEngine.setNoiseOutputGain(db)
+    }
+
+    fun setNoiseSmoothing(percent: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(smoothingPercent = percent)
+        audioEngine.setNoiseSmoothing(percent / 100f)
+    }
+
+    fun setNoiseSmoothingMode(mode: Int) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(smoothingMode = mode)
+        audioEngine.setNoiseSmoothingMode(mode)
+    }
+
+    fun setNoiseDfttStrength(strength: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(dfttStrength = strength)
+        audioEngine.setNoiseDfttStrength(strength)
+    }
+
+    fun setNoiseSignalProtection(percent: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(
+            signalProtectionPercent = percent,
+        )
+        audioEngine.setNoiseMasking(percent / 100f)
+    }
+
+    fun setNoiseWhitening(percent: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(whiteningPercent = percent)
+        audioEngine.setNoiseWhitening(percent / 100f)
+    }
+
+    fun setNoiseSuppression(percent: Float) {
+        _noiseRepellentState.value =
+            _noiseRepellentState.value.copy(suppressionPercent = percent)
+        audioEngine.setNoiseSuppressionStrength(percent / 100f)
+    }
+
+    fun setNoiseAggressiveness(value: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(aggressiveness = value)
+        audioEngine.setNoiseAggressiveness(value)
+    }
+
+    fun setNoiseProfileOffset(db: Float) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(profileOffsetDb = db)
+        audioEngine.setNoiseProfileOffset(db)
+    }
+
+    fun setNoiseTonalProfileOffset(db: Float) {
+        _noiseRepellentState.value =
+            _noiseRepellentState.value.copy(tonalProfileOffsetDb = db)
+        audioEngine.setNoiseTonalProfileOffset(db)
+    }
+
+    fun setNoiseAdaptive(on: Boolean) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(adaptiveNoise = on)
+        audioEngine.setNoiseAdaptive(on)
+    }
+
+    fun setNoiseEstimatorMethod(method: Int) {
+        cancelNoiseLearning()
+        _noiseRepellentState.value =
+            _noiseRepellentState.value.copy(estimatorMethod = method)
+        audioEngine.setNoiseEstimatorMethod(method)
+    }
+
+    fun setNoiseQualityMode(mode: Int) {
+        cancelNoiseLearning()
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(qualityMode = mode)
+        audioEngine.setNoiseQualityMode(mode)
+    }
+
+    fun setNoiseCurveEnabled(on: Boolean) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(curveEnabled = on)
+        audioEngine.setNoiseCurveEnabled(on)
+    }
+
+    fun setNoiseCurveBand(band: Int, db: Float) {
+        val bands = _noiseRepellentState.value.curveBandsDb.toMutableList()
+        if (band !in bands.indices) return
+        bands[band] = db
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(curveBandsDb = bands)
+        audioEngine.setNoiseCurveBand(band, db)
+    }
+
+    fun setSpectrumEnabled(enabled: Boolean) = audioEngine.setSpectrumEnabled(enabled)
+
+    fun setNoiseResidualListen(on: Boolean) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(residualListen = on)
+        audioEngine.setNoiseResidualListen(on)
+    }
+
+    fun setNoiseTransientProtection(on: Boolean) {
+        _noiseRepellentState.value = _noiseRepellentState.value.copy(transientProtection = on)
+        audioEngine.setNoiseTransientProtection(on)
     }
 
     fun setMasterBypass(bypass: Boolean) {
@@ -229,6 +430,26 @@ class AudioViewModel @Inject constructor(
     fun applyPreset(preset: Preset) {
         _selectedPreset.value = preset
         val e = preset.effects
+        setNoiseRepellentEnabled(e.noiseRepellentEnabled)
+        setNoiseReduction(e.noiseReduction)
+        setNoiseTonalReduction(e.noiseTonalReduction)
+        setNoiseOutputGain(e.noiseOutputGain)
+        setNoiseSmoothing(e.noiseSmoothing)
+        setNoiseSmoothingMode(e.noiseSmoothingMode)
+        setNoiseDfttStrength(e.noiseDfttStrength)
+        setNoiseSignalProtection(e.noiseSignalProtection)
+        setNoiseWhitening(e.noiseWhitening)
+        setNoiseSuppression(e.noiseSuppression)
+        setNoiseAggressiveness(e.noiseAggressiveness)
+        setNoiseProfileOffset(e.noiseProfileOffset)
+        setNoiseTonalProfileOffset(e.noiseTonalProfileOffset)
+        setNoiseAdaptive(e.noiseAdaptive)
+        setNoiseEstimatorMethod(e.noiseEstimatorMethod)
+        setNoiseQualityMode(e.noiseQualityMode)
+        setNoiseCurveEnabled(e.noiseCurveEnabled)
+        e.noiseCurveBands.forEachIndexed(::setNoiseCurveBand)
+        setNoiseResidualListen(e.noiseResidualListen)
+        setNoiseTransientProtection(e.noiseTransientProtection)
         setGateEnabled(e.gateEnabled);     setGateThreshold(e.gateThreshold)
         setGateAttack(e.gateAttack);       setGateRelease(e.gateRelease)
         setEqEnabled(e.eqEnabled);         e.eqBands.forEachIndexed { i, db -> setEqBand(i, db) }
@@ -243,12 +464,54 @@ class AudioViewModel @Inject constructor(
         _compState.value   = CompState(e.compEnabled, e.compThreshold, e.compRatio, e.compAttack, e.compRelease, e.compMakeup)
         _reverbState.value = ReverbState(e.reverbEnabled, e.reverbMix, e.reverbRoom, e.reverbDamp)
         _pitchState.value  = PitchState(e.pitchEnabled, e.pitchSemitones)
+        _noiseRepellentState.value = NoiseRepellentState(
+            enabled = e.noiseRepellentEnabled,
+            reductionDb = e.noiseReduction,
+            tonalReductionDb = e.noiseTonalReduction,
+            outputGainDb = e.noiseOutputGain,
+            smoothingPercent = e.noiseSmoothing,
+            smoothingMode = e.noiseSmoothingMode,
+            dfttStrength = e.noiseDfttStrength,
+            signalProtectionPercent = e.noiseSignalProtection,
+            whiteningPercent = e.noiseWhitening,
+            suppressionPercent = e.noiseSuppression,
+            aggressiveness = e.noiseAggressiveness,
+            profileOffsetDb = e.noiseProfileOffset,
+            tonalProfileOffsetDb = e.noiseTonalProfileOffset,
+            adaptiveNoise = e.noiseAdaptive,
+            estimatorMethod = e.noiseEstimatorMethod,
+            qualityMode = e.noiseQualityMode,
+            curveEnabled = e.noiseCurveEnabled,
+            curveBandsDb = e.noiseCurveBands,
+            residualListen = e.noiseResidualListen,
+            transientProtection = e.noiseTransientProtection,
+        )
     }
 
     fun savePreset(name: String) {
         val preset = Preset(
             name    = name,
             effects = EffectState(
+                noiseRepellentEnabled = _noiseRepellentState.value.enabled,
+                noiseReduction = _noiseRepellentState.value.reductionDb,
+                noiseTonalReduction = _noiseRepellentState.value.tonalReductionDb,
+                noiseOutputGain = _noiseRepellentState.value.outputGainDb,
+                noiseSmoothing = _noiseRepellentState.value.smoothingPercent,
+                noiseSmoothingMode = _noiseRepellentState.value.smoothingMode,
+                noiseDfttStrength = _noiseRepellentState.value.dfttStrength,
+                noiseSignalProtection = _noiseRepellentState.value.signalProtectionPercent,
+                noiseWhitening = _noiseRepellentState.value.whiteningPercent,
+                noiseSuppression = _noiseRepellentState.value.suppressionPercent,
+                noiseAggressiveness = _noiseRepellentState.value.aggressiveness,
+                noiseProfileOffset = _noiseRepellentState.value.profileOffsetDb,
+                noiseTonalProfileOffset = _noiseRepellentState.value.tonalProfileOffsetDb,
+                noiseAdaptive = _noiseRepellentState.value.adaptiveNoise,
+                noiseEstimatorMethod = _noiseRepellentState.value.estimatorMethod,
+                noiseQualityMode = _noiseRepellentState.value.qualityMode,
+                noiseCurveEnabled = _noiseRepellentState.value.curveEnabled,
+                noiseCurveBands = _noiseRepellentState.value.curveBandsDb,
+                noiseResidualListen = _noiseRepellentState.value.residualListen,
+                noiseTransientProtection = _noiseRepellentState.value.transientProtection,
                 gateEnabled   = _gateState.value.enabled,
                 gateThreshold = _gateState.value.thresholdDb,
                 gateAttack    = _gateState.value.attackMs,
@@ -329,19 +592,15 @@ class AudioViewModel @Inject constructor(
 
     fun loadOutputDevices(context: android.content.Context) {
         _outputDevices.value = SoftwareLoopback.getOutputDevices(context)
-        // Restore saved selection
         val saved = context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
             .getInt("output_device_id", -1)
         _selectedOutputDeviceId.value = saved
-        SoftwareLoopback.setOutputDevice(context, saved)
     }
 
     fun setOutputDevice(context: android.content.Context, deviceId: Int) {
         _selectedOutputDeviceId.value = deviceId
         SoftwareLoopback.setOutputDevice(context, deviceId)
-        // Persist selection
-        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
-            .edit().putInt("output_device_id", deviceId).apply()
+        AudioProcessingService.reinitialize(context, "Monitor output changed")
     }
 
     // ── Input device (fixes #5 — external sound cards were stuck on the built-in mic) ──
@@ -357,14 +616,51 @@ class AudioViewModel @Inject constructor(
         val saved = context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
             .getInt("input_device_id", -1)
         _selectedInputDeviceId.value = saved
-        audioEngine.setInputDevice(saved)
     }
 
     fun setInputDevice(context: android.content.Context, deviceId: Int) {
         _selectedInputDeviceId.value = deviceId
-        audioEngine.setInputDevice(deviceId)
+        SoftwareLoopback.setInputDevice(context, deviceId)
+        AudioProcessingService.reinitialize(context, "Microphone input changed")
+    }
+
+    fun refreshAudioDevices(context: android.content.Context) {
+        loadOutputDevices(context)
+        loadInputDevices(context)
+        AudioRouteDiagnostics.inventoryChanged("Manual inventory refresh")
+        SoftwareLoopback.inventorySummary(context).lineSequence()
+            .forEach(AudioRouteDiagnostics::event)
+    }
+
+    fun reinitializeAudioStack(context: android.content.Context) {
+        AudioProcessingService.reinitialize(context, "Manual full audio-stack reset")
+    }
+
+    fun clearAudioRouteLog(context: android.content.Context) {
+        AudioRouteDiagnostics.clear(context)
+    }
+
+    fun exportAudioRouteLog(context: android.content.Context): String =
+        AudioRouteDiagnostics.export(context)
+
+    fun setAudioReleasePause(context: android.content.Context, milliseconds: Long) {
         context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
-            .edit().putInt("input_device_id", deviceId).apply()
+            .edit().putLong("audio_release_pause_ms", milliseconds.coerceIn(100L, 2000L)).apply()
+    }
+
+    fun setAudioInputSettle(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_input_settle_ms", milliseconds.coerceIn(50L, 2000L)).apply()
+    }
+
+    fun setAudioRouteTimeout(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_route_timeout_ms", milliseconds.coerceIn(2000L, 30000L)).apply()
+    }
+
+    fun setAudioOutputVerify(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_output_verify_ms", milliseconds.coerceIn(500L, 10000L)).apply()
     }
 
 }
