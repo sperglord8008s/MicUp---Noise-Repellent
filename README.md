@@ -34,6 +34,8 @@ No PC required. No monthly subscription.
 -  **Audio-feed diagnostics** — RMS, peak, crest factor, clipping, DC offset, short reads, STFT geometry, transient state, and tonal peaks
 -  **Stethoscope listen gain** — smoothed post-denoiser gain with bounded output
 -  **USB input and Bluetooth output selection** — remembers both routes and clears stale profiles when the microphone changes
+-  **Verified Bluetooth routing** — distinguishes A2DP from SCO/BLE call audio, rebuilds the complete stack in a staged sequence, and safety-mutes speaker fallbacks
+-  **Android device diagnostics** — shows `AudioDeviceInfo` type, ID, rates/channels, microphone metadata, requested route, actual route, and a copyable persistent log
 -  **Built-in DSP chain** — Noise Gate, 10-band EQ, Compressor, Reverb, Pitch Shifter
 -  **Plugin support** — Load LV2, CLAP, and VST3 native plugins (`.so`, `.clap`, `.lv2`)
 -  **Open plugin files** — Tap a plugin file in your file manager to import it directly

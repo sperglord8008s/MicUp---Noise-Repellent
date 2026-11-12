@@ -112,7 +112,8 @@ class AudioEngine @Inject constructor(
     fun setMonitoring(enabled: Boolean) = oboe.setParam(98, 0, if (enabled) 1f else 0f)
     fun setMasterBypass(bypass: Boolean) = oboe.setParam(99, 0, if (bypass) 1f else 0f)
     fun setInjectionMode(enabled: Boolean) = oboe.setInjectionMode(enabled)
-    fun setInputDevice(deviceId: Int) = oboe.setInputDevice(deviceId)
+    fun setInputDevice(deviceId: Int, communicationRoute: Boolean = false) =
+        oboe.setInputDevice(deviceId, communicationRoute)
 
     // ── Built-in Noise Repellent (libspecbleach) ─────────────────────────────
     fun setNoiseRepellentEnabled(on: Boolean) =

@@ -254,7 +254,7 @@ public:
     // Fixes #5: previously the input stream always opened on whatever the OS considered the
     // default mic, so an external/USB sound card's input could never be selected even though
     // its output could. Safe to call while running — reopens the streams to apply.
-    void setInputDeviceId(int32_t deviceId);
+    void setInputDeviceId(int32_t deviceId, bool communicationRoute);
     int32_t getInputDeviceId() const { return inputDeviceId_.load(std::memory_order_relaxed); }
 
     // oboe callbacks
@@ -296,6 +296,9 @@ private:
     // Preferred input device id — see setInputDeviceId() above. oboe::kUnspecified means
     // "let the system pick", which preserves the original default behavior.
     std::atomic<int32_t> inputDeviceId_{oboe::kUnspecified};
+    // SCO/BLE capture must use Android's communication preset and a shared stream;
+    // raw/exclusive capture is commonly unsupported by Bluetooth HALs.
+    std::atomic<bool> communicationInput_{false};
 
     // Restart loop protection
     static constexpr int kMaxRestarts = 5;

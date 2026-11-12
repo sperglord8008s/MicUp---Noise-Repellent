@@ -238,23 +238,43 @@ bool AudioEngine::openStreams() {
     // deviceId defaults to oboe::kUnspecified (system default mic) unless the user picked
     // a specific input (e.g. a USB sound card) in Settings — see setInputDeviceId().
     int32_t preferredInputId = inputDeviceId_.load(std::memory_order_relaxed);
+    const bool communicationInput =
+        communicationInput_.load(std::memory_order_relaxed);
+    const auto preferredPreset = communicationInput
+        ? oboe::InputPreset::VoiceCommunication
+        : oboe::InputPreset::Unprocessed;
     auto result = builder
         .setDirection(oboe::Direction::Input)
         ->setDeviceId(preferredInputId)
-        ->setInputPreset(oboe::InputPreset::Unprocessed)
+        ->setInputPreset(preferredPreset)
         ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
         ->setSharingMode(oboe::SharingMode::Exclusive)
         ->setFormat(oboe::AudioFormat::Float)
+        ->setFormatConversionAllowed(true)
+        ->setChannelConversionAllowed(true)
+        ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
         ->setChannelCount(1)
         ->setSampleRate(48000)
         ->openStream(inputStream_);
 
     // Some devices do not expose Android's raw/unprocessed capture preset.
     // VoiceRecognition is the least-processed broadly supported fallback.
-    if (result != oboe::Result::OK) {
+    if (result != oboe::Result::OK && !communicationInput) {
         LOGE("Unprocessed input unavailable: %s — retrying VoiceRecognition",
              oboe::convertToText(result));
         builder.setInputPreset(oboe::InputPreset::VoiceRecognition);
+        result = builder.openStream(inputStream_);
+    }
+
+    // Bluetooth SCO/BLE and a number of USB HALs do not offer exclusive capture.
+    // Retry the requested source in shared mode before falling back to a different mic.
+    if (result != oboe::Result::OK) {
+        LOGE("Exclusive input unavailable: %s — retrying selected route shared",
+             oboe::convertToText(result));
+        builder.setSharingMode(oboe::SharingMode::Shared)
+               ->setInputPreset(communicationInput
+                    ? oboe::InputPreset::VoiceCommunication
+                    : oboe::InputPreset::VoiceRecognition);
         result = builder.openStream(inputStream_);
     }
 
@@ -263,7 +283,11 @@ bool AudioEngine::openStreams() {
         // system default rather than leaving the engine unable to start at all.
         LOGE("Failed to open input stream on device %d: %s — retrying with default device",
              preferredInputId, oboe::convertToText(result));
-        builder.setDeviceId(oboe::kUnspecified);
+        builder.setDeviceId(oboe::kUnspecified)
+               ->setSharingMode(oboe::SharingMode::Shared)
+               ->setInputPreset(communicationInput
+                    ? oboe::InputPreset::VoiceCommunication
+                    : oboe::InputPreset::VoiceRecognition);
         result = builder.openStream(inputStream_);
     }
 
@@ -282,20 +306,30 @@ bool AudioEngine::openStreams() {
         LOGE("Noise Repellent engine unavailable; continuing without denoising");
     }
 
-    // ─ Output stream (playback → VOICE_COMMUNICATION) ────────────────────────
+    // ─ Silent callback-driver output stream ──────────────────────────────────
     builder.setDirection(oboe::Direction::Output)
            // Do not carry the selected USB input's device id into this silent
            // driver stream. Audible routing is handled by SoftwareLoopback.
            ->setDeviceId(oboe::kUnspecified)
            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-           ->setSharingMode(oboe::SharingMode::Exclusive)
+           // This silent driver must coexist with AudioTrack and Bluetooth endpoints.
+           // Exclusive mode is frequently unavailable on SCO/A2DP routes.
+           ->setSharingMode(oboe::SharingMode::Shared)
            ->setFormat(oboe::AudioFormat::Float)
+           ->setFormatConversionAllowed(true)
+           ->setChannelConversionAllowed(true)
+           ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
            ->setChannelCount(1)
            ->setSampleRate(sampleRate_)
            ->setFramesPerDataCallback(framesPerBurst_)
            ->setDataCallback(this)
            ->setErrorCallback(this)
-           ->setUsage(oboe::Usage::VoiceCommunication)
+           // This stream is deliberately zero-filled below and exists only to drive the
+           // real-time callback. Advertising it as VoiceCommunication made Android treat it
+           // as a second routing request, which could pull a separately routed A2DP monitor
+           // back to the speaker/SCO path. Audible routing belongs exclusively to
+           // SoftwareLoopback's verified AudioTrack.
+           ->setUsage(oboe::Usage::Media)
            ->setContentType(oboe::ContentType::Speech);
 
     result = builder.openStream(outputStream_);
@@ -644,10 +678,12 @@ void AudioEngine::resetNoiseRepellentProfile() {
     }
 }
 
-void AudioEngine::setInputDeviceId(int32_t deviceId) {
+void AudioEngine::setInputDeviceId(int32_t deviceId, bool communicationRoute) {
     const int32_t previous =
         inputDeviceId_.exchange(deviceId, std::memory_order_acq_rel);
-    if (previous == deviceId) return;
+    const bool previousCommunication =
+        communicationInput_.exchange(communicationRoute, std::memory_order_acq_rel);
+    if (previous == deviceId && previousCommunication == communicationRoute) return;
 
     const bool wasRunning = running_.exchange(false, std::memory_order_acq_rel);
     if (wasRunning) closeStreams();
@@ -1243,10 +1279,13 @@ Java_com_micplugin_audio_OboeEngine_nativeSetInjectionMode(
 
 JNIEXPORT void JNICALL
 Java_com_micplugin_audio_OboeEngine_nativeSetInputDevice(
-    JNIEnv*, jobject, jlong handle, jint deviceId) {
+    JNIEnv*, jobject, jlong handle, jint deviceId, jboolean communicationRoute) {
     auto* engine = reinterpret_cast<micplugin::AudioEngine*>(handle);
-    if (engine) engine->setInputDeviceId(deviceId);
-    LOGI("Input device set to %d", deviceId);
+    if (engine) {
+        engine->setInputDeviceId(deviceId, communicationRoute == JNI_TRUE);
+    }
+    LOGI("Input device set to %d (communication=%s)", deviceId,
+         communicationRoute == JNI_TRUE ? "true" : "false");
 }
 
 JNIEXPORT void JNICALL

@@ -4,6 +4,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -27,12 +28,33 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
     val status      by vm.engineStatus.collectAsState()
     val tier        by vm.virtualMicTier.collectAsState()
     val shizukuState by vm.shizukuState.collectAsState()
+    val routeStatus by vm.audioRouteStatus.collectAsState()
+    val routeEvents by vm.audioRouteEvents.collectAsState()
     val context     = LocalContext.current
 
     var crashReports by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
     var viewingCrash by remember { mutableStateOf<java.io.File?>(null) }
+    val audioPrefs = remember {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    var releasePauseMs by remember {
+        mutableFloatStateOf(audioPrefs.getLong("audio_release_pause_ms", 300L).toFloat())
+    }
+    var inputSettleMs by remember {
+        mutableFloatStateOf(audioPrefs.getLong("audio_input_settle_ms", 250L).toFloat())
+    }
+    var routeTimeoutMs by remember {
+        mutableFloatStateOf(audioPrefs.getLong("audio_route_timeout_ms", 8000L).toFloat())
+    }
+    var outputVerifyMs by remember {
+        mutableFloatStateOf(audioPrefs.getLong("audio_output_verify_ms", 3000L).toFloat())
+    }
 
     LaunchedEffect(Unit) { crashReports = CrashReporter.getCrashReports(context) }
+    LaunchedEffect(routeStatus.inventoryVersion, routeStatus.generation) {
+        vm.loadOutputDevices(context)
+        vm.loadInputDevices(context)
+    }
 
     Column(
         modifier = Modifier
@@ -58,6 +80,116 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                 SettingsInfoRow("Sample Rate", "${status.sampleRate} Hz")
                 SettingsInfoRow("Frames/Burst", "${status.framesPerBurst}")
                 SettingsInfoRow("Latency (est.)", "~${status.latencyMs.toInt()} ms")
+                HorizontalDivider(color = StudioColors.Border)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Audio route", fontSize = 12.sp, color = StudioColors.TextMuted)
+                        Text(
+                            routeStatus.phase,
+                            fontSize = 12.sp,
+                            color = when (routeStatus.lastResetSucceeded) {
+                                true -> Color(0xFF3DFCAC)
+                                false -> StudioColors.MeterRed
+                                null -> StudioColors.Accent
+                            },
+                        )
+                    }
+                    if (routeStatus.isResetting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = StudioColors.Accent,
+                        )
+                    }
+                    InfoButton(
+                        title = "Verified audio routing",
+                        text = "MicUp now closes both streams, releases Android's old route, " +
+                            "selects SCO/BLE communication audio when required, opens input, " +
+                            "waits, then opens output muted. It only unmutes after AudioTrack " +
+                            "reports the requested physical device. A speaker fallback stays muted.",
+                    )
+                }
+                Text(routeStatus.detail, fontSize = 10.sp, color = StudioColors.TextMuted)
+                AudioRouteDetail("Requested input", routeStatus.requestedInput)
+                AudioRouteDetail("Requested output", routeStatus.requestedOutput)
+                AudioRouteDetail("Actual output", routeStatus.actualOutput)
+                AudioRouteDetail("Communication", routeStatus.communicationDevice)
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = { vm.reinitializeAudioStack(context) },
+                        enabled = !routeStatus.isResetting,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = StudioColors.Accent),
+                    ) {
+                        Icon(Icons.Default.RestartAlt, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Reset stack", fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { vm.refreshAudioDevices(context) },
+                        modifier = Modifier.weight(1f),
+                        border = BorderStroke(1.dp, StudioColors.Border),
+                    ) {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Rescan", fontSize = 11.sp)
+                    }
+                }
+
+                HorizontalDivider(color = StudioColors.Border)
+                RouteTimingControl(
+                    title = "Release pause",
+                    valueMs = releasePauseMs,
+                    range = 100f..1500f,
+                    help = "Pause after closing Oboe, AudioTrack and the old SCO route. " +
+                        "Increase this if the phone's audio HAL keeps stale device handles.",
+                    onValueChange = { releasePauseMs = it },
+                    onValueCommitted = {
+                        vm.setAudioReleasePause(context, releasePauseMs.toLong())
+                    },
+                )
+                RouteTimingControl(
+                    title = "Input settle pause",
+                    valueMs = inputSettleMs,
+                    range = 50f..1500f,
+                    help = "Pause between opening the selected microphone and creating the " +
+                        "monitor AudioTrack. Bluetooth and some USB HALs need this sequence.",
+                    onValueChange = { inputSettleMs = it },
+                    onValueCommitted = {
+                        vm.setAudioInputSettle(context, inputSettleMs.toLong())
+                    },
+                )
+                RouteTimingControl(
+                    title = "SCO/BLE route timeout",
+                    valueMs = routeTimeoutMs,
+                    range = 2000f..20000f,
+                    help = "Maximum wait for Android to confirm setCommunicationDevice. " +
+                        "Bluetooth profile switching can be slow; increase this if the log " +
+                        "shows the route arriving just after a timeout.",
+                    onValueChange = { routeTimeoutMs = it },
+                    onValueCommitted = {
+                        vm.setAudioRouteTimeout(context, routeTimeoutMs.toLong())
+                    },
+                )
+                RouteTimingControl(
+                    title = "Physical output verification",
+                    valueMs = outputVerifyMs,
+                    range = 500f..8000f,
+                    help = "How long MicUp waits for AudioTrack.routedDevice after playback " +
+                        "starts muted. It never unmutes an unverified speaker fallback.",
+                    onValueChange = { outputVerifyMs = it },
+                    onValueCommitted = {
+                        vm.setAudioOutputVerify(context, outputVerifyMs.toLong())
+                    },
+                )
             }
 
             // ── Shizuku ───────────────────────────────────────────────────────
@@ -144,7 +276,19 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             SettingsSection("Monitor Output Device") {
                 val devices    by vm.outputDevices.collectAsState()
                 val selectedId by vm.selectedOutputDeviceId.collectAsState()
-                LaunchedEffect(Unit) { vm.loadOutputDevices(context) }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    InfoButton(
+                        title = "A2DP versus SCO",
+                        text = "A2DP is the normal high-quality Bluetooth headphone output, " +
+                            "but it has substantial latency. SCO is low-bandwidth call audio " +
+                            "and supports a Bluetooth microphone. Selecting a Bluetooth mic " +
+                            "forces the matching SCO/BLE communication output because Android " +
+                            "cannot keep classic A2DP playback and SCO capture active together.",
+                    )
+                }
                 if (devices.isEmpty()) {
                     Text("No devices found", fontSize = 12.sp, color = StudioColors.TextMuted)
                 } else {
@@ -162,9 +306,12 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                             Column {
                                 Text(device.name, fontSize = 12.sp,
                                     color = if (isSelected) StudioColors.Accent else StudioColors.TextPrimary)
-                                if (device.id == -1)
-                                    Text("Prefers headset then earpiece, never speaker",
-                                        fontSize = 9.sp, color = StudioColors.TextMuted)
+                                Text(
+                                    device.details,
+                                    fontSize = 9.sp,
+                                    color = StudioColors.TextMuted,
+                                    lineHeight = 12.sp,
+                                )
                             }
                         }
                     }
@@ -174,7 +321,6 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             SettingsSection("Input Device") {
                 val devices    by vm.inputDevices.collectAsState()
                 val selectedId by vm.selectedInputDeviceId.collectAsState()
-                LaunchedEffect(Unit) { vm.loadInputDevices(context) }
                 if (devices.isEmpty()) {
                     Text("No devices found", fontSize = 12.sp, color = StudioColors.TextMuted)
                 } else {
@@ -192,11 +338,86 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                             Column {
                                 Text(device.name, fontSize = 12.sp,
                                     color = if (isSelected) StudioColors.Accent else StudioColors.TextPrimary)
-                                if (device.id == -1)
-                                    Text("Uses whatever the OS considers the default mic",
-                                        fontSize = 9.sp, color = StudioColors.TextMuted)
+                                Text(
+                                    device.details,
+                                    fontSize = 9.sp,
+                                    color = StudioColors.TextMuted,
+                                    lineHeight = 12.sp,
+                                )
                             }
                         }
+                    }
+                }
+            }
+
+            SettingsSection("Audio Route Log") {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Last ${routeEvents.size} routing events",
+                        fontSize = 11.sp,
+                        color = StudioColors.TextMuted,
+                    )
+                    InfoButton(
+                        title = "Audio route log",
+                        text = "Shows every stop, device inventory, communication-device " +
+                            "request, preferred-device result and actual routed output. The " +
+                            "persistent copy is capped at 256 KiB.",
+                    )
+                }
+                Surface(
+                    color = StudioColors.Background,
+                    border = BorderStroke(0.5.dp, StudioColors.Border),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 220.dp),
+                ) {
+                    val logScroll = rememberScrollState()
+                    LaunchedEffect(routeEvents.size) {
+                        logScroll.animateScrollTo(logScroll.maxValue)
+                    }
+                    SelectionContainer {
+                        Text(
+                            routeEvents.takeLast(60).joinToString("\n").ifBlank {
+                                "No route events yet. Tap Reset stack."
+                            },
+                            modifier = Modifier.padding(8.dp).verticalScroll(logScroll),
+                            fontSize = 9.sp,
+                            lineHeight = 12.sp,
+                            color = StudioColors.TextMuted,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val text = vm.exportAudioRouteLog(context)
+                            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                            clipboard?.setPrimaryClip(
+                                android.content.ClipData.newPlainText("MicUp audio route log", text),
+                            )
+                            android.widget.Toast.makeText(
+                                context,
+                                "Audio route log copied",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        border = BorderStroke(1.dp, StudioColors.Border),
+                    ) {
+                        Text("Copy log", fontSize = 11.sp)
+                    }
+                    TextButton(
+                        onClick = { vm.clearAudioRouteLog(context) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Clear log", fontSize = 11.sp, color = StudioColors.TextMuted)
                     }
                 }
             }
@@ -210,7 +431,7 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             // ── About ─────────────────────────────────────────────────────────
             SettingsSection("About") {
                 SettingsInfoRow("Version", com.micplugin.BuildConfig.VERSION_NAME)
-                SettingsInfoRow("Build", "MicUp NR 1.1 · libspecbleach 0.4.1 · Oboe 1.8.1")
+                SettingsInfoRow("Build", "MicUp NR 1.1.1 · libspecbleach 0.4.1 · Oboe 1.8.1")
                 SettingsInfoRow("Native", "C++17 · NDK 26 · AAudio/OpenSL ES")
             }
 
@@ -277,6 +498,57 @@ private fun SettingsInfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontSize = 12.sp, color = StudioColors.TextMuted)
         Text(value, fontSize = 12.sp, color = StudioColors.TextPrimary)
+    }
+}
+
+@Composable
+private fun AudioRouteDetail(label: String, value: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, fontSize = 9.sp, color = StudioColors.TextMuted)
+        Text(
+            value,
+            fontSize = 10.sp,
+            lineHeight = 13.sp,
+            color = StudioColors.TextPrimary,
+        )
+    }
+}
+
+@Composable
+private fun RouteTimingControl(
+    title: String,
+    valueMs: Float,
+    range: ClosedFloatingPointRange<Float>,
+    help: String,
+    onValueChange: (Float) -> Unit,
+    onValueCommitted: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 11.sp, color = StudioColors.TextMuted)
+                Spacer(Modifier.width(4.dp))
+                InfoButton(title = title, text = help)
+            }
+            Text("${valueMs.toInt()} ms", fontSize = 11.sp, color = StudioColors.Accent)
+        }
+        Slider(
+            value = valueMs,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueCommitted,
+            valueRange = range,
+            steps = 13,
+            colors = SliderDefaults.colors(
+                thumbColor = StudioColors.Accent,
+                activeTrackColor = StudioColors.Accent,
+                inactiveTrackColor = StudioColors.Border,
+            ),
+            modifier = Modifier.height(30.dp),
+        )
     }
 }
 

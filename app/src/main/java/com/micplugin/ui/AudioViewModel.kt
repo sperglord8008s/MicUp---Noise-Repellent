@@ -12,6 +12,8 @@ import com.micplugin.preset.Preset
 import com.micplugin.preset.PresetManager
 import com.micplugin.plugin.PluginPathPrefs
 import com.micplugin.service.ShizukuManager
+import com.micplugin.service.AudioProcessingService
+import com.micplugin.service.AudioRouteDiagnostics
 import com.micplugin.service.SoftwareLoopback
 import com.micplugin.service.ShizukuState
 import com.micplugin.service.VirtualMicService
@@ -102,6 +104,8 @@ class AudioViewModel @Inject constructor(
     val noiseRepellentStatus: StateFlow<NoiseRepellentStatus> =
         audioEngine.noiseRepellentStatus
     val spectrum: StateFlow<SpectrumFrame> = audioEngine.spectrum
+    val audioRouteStatus = AudioRouteDiagnostics.status
+    val audioRouteEvents = AudioRouteDiagnostics.events
 
     private val _gateState   = MutableStateFlow(GateState())
     private val _eqState     = MutableStateFlow(EqState())
@@ -588,19 +592,15 @@ class AudioViewModel @Inject constructor(
 
     fun loadOutputDevices(context: android.content.Context) {
         _outputDevices.value = SoftwareLoopback.getOutputDevices(context)
-        // Restore saved selection
         val saved = context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
             .getInt("output_device_id", -1)
         _selectedOutputDeviceId.value = saved
-        SoftwareLoopback.setOutputDevice(context, saved)
     }
 
     fun setOutputDevice(context: android.content.Context, deviceId: Int) {
         _selectedOutputDeviceId.value = deviceId
         SoftwareLoopback.setOutputDevice(context, deviceId)
-        // Persist selection
-        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
-            .edit().putInt("output_device_id", deviceId).apply()
+        AudioProcessingService.reinitialize(context, "Monitor output changed")
     }
 
     // ── Input device (fixes #5 — external sound cards were stuck on the built-in mic) ──
@@ -616,14 +616,51 @@ class AudioViewModel @Inject constructor(
         val saved = context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
             .getInt("input_device_id", -1)
         _selectedInputDeviceId.value = saved
-        audioEngine.setInputDevice(saved)
     }
 
     fun setInputDevice(context: android.content.Context, deviceId: Int) {
         _selectedInputDeviceId.value = deviceId
-        audioEngine.setInputDevice(deviceId)
+        SoftwareLoopback.setInputDevice(context, deviceId)
+        AudioProcessingService.reinitialize(context, "Microphone input changed")
+    }
+
+    fun refreshAudioDevices(context: android.content.Context) {
+        loadOutputDevices(context)
+        loadInputDevices(context)
+        AudioRouteDiagnostics.inventoryChanged("Manual inventory refresh")
+        SoftwareLoopback.inventorySummary(context).lineSequence()
+            .forEach(AudioRouteDiagnostics::event)
+    }
+
+    fun reinitializeAudioStack(context: android.content.Context) {
+        AudioProcessingService.reinitialize(context, "Manual full audio-stack reset")
+    }
+
+    fun clearAudioRouteLog(context: android.content.Context) {
+        AudioRouteDiagnostics.clear(context)
+    }
+
+    fun exportAudioRouteLog(context: android.content.Context): String =
+        AudioRouteDiagnostics.export(context)
+
+    fun setAudioReleasePause(context: android.content.Context, milliseconds: Long) {
         context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
-            .edit().putInt("input_device_id", deviceId).apply()
+            .edit().putLong("audio_release_pause_ms", milliseconds.coerceIn(100L, 2000L)).apply()
+    }
+
+    fun setAudioInputSettle(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_input_settle_ms", milliseconds.coerceIn(50L, 2000L)).apply()
+    }
+
+    fun setAudioRouteTimeout(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_route_timeout_ms", milliseconds.coerceIn(2000L, 30000L)).apply()
+    }
+
+    fun setAudioOutputVerify(context: android.content.Context, milliseconds: Long) {
+        context.getSharedPreferences("micup_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putLong("audio_output_verify_ms", milliseconds.coerceIn(500L, 10000L)).apply()
     }
 
 }

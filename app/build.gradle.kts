@@ -17,7 +17,7 @@ android {
         minSdk = 26
         targetSdk = 34
         // Version injected by CI from git tag (e.g. v1.2.3 → 1.2.3)
-        val tagName = System.getenv("RELEASE_TAG") ?: "1.1.0"
+        val tagName = System.getenv("RELEASE_TAG") ?: "1.1.1"
         val cleanTag = tagName.removePrefix("v")
         val parts = cleanTag.split(".").mapNotNull { it.toIntOrNull() }
         versionCode = (parts.getOrElse(0){1} * 10000) +
