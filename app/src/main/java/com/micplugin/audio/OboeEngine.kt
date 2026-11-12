@@ -41,6 +41,21 @@ class OboeEngine @Inject constructor() {
     fun getLevels(): FloatArray =
         if (engineHandle != 0L) nativeGetLevels(engineHandle) else floatArrayOf(-100f, -100f, 0f)
 
+    fun getNoiseRepellentStatus(): FloatArray =
+        if (engineHandle != 0L) nativeGetNoiseRepellentStatus(engineHandle)
+        else floatArrayOf(0f, 0f, 0f)
+
+    fun getSpectrum(): FloatArray =
+        if (engineHandle != 0L) nativeGetSpectrum(engineHandle) else FloatArray(6150)
+
+    fun setSpectrumEnabled(enabled: Boolean) {
+        if (engineHandle != 0L) nativeSetSpectrumEnabled(engineHandle, enabled)
+    }
+
+    fun resetNoiseRepellentProfile() {
+        if (engineHandle != 0L) nativeResetNoiseRepellentProfile(engineHandle)
+    }
+
     fun loadPlugin(soPath: String, formatId: Int): Long =
         if (engineHandle != 0L) nativeLoadPlugin(engineHandle, soPath, formatId) else 0L
 
@@ -87,6 +102,10 @@ class OboeEngine @Inject constructor() {
     private external fun nativeStop(handle: Long)
     private external fun nativeSetParam(handle: Long, effectId: Int, paramId: Int, value: Float)
     private external fun nativeGetLevels(handle: Long): FloatArray
+    private external fun nativeGetNoiseRepellentStatus(handle: Long): FloatArray
+    private external fun nativeGetSpectrum(handle: Long): FloatArray
+    private external fun nativeSetSpectrumEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeResetNoiseRepellentProfile(handle: Long)
     private external fun nativeLoadPlugin(handle: Long, soPath: String, formatId: Int): Long
     private external fun nativeUnloadPlugin(handle: Long, pluginHandle: Long)
     private external fun nativeSetPluginParam(handle: Long, pluginHandle: Long, paramId: Int, value: Float)

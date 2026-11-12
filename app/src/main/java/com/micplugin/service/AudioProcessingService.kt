@@ -76,7 +76,7 @@ class AudioProcessingService : Service() {
 
         val latencyStr = if (latencyMs > 0f) " · ${latencyMs.toInt()}ms" else ""
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("MicUp Active")
+            .setContentTitle("MicUp NR Active")
             .setContentText("$text$latencyStr")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(mainIntent)
@@ -139,6 +139,9 @@ class AudioProcessingService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val savedInputDevice = getSharedPreferences("micup_prefs", Context.MODE_PRIVATE)
+            .getInt("input_device_id", -1)
+        audioEngine.setInputDevice(savedInputDevice)
         audioEngine.setMonitorCallback { buf: FloatArray, size: Int -> SoftwareLoopback.writeProcessed(buf, size) }
         audioEngine.start()
         startStatusUpdates()

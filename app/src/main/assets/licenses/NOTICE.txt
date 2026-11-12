@@ -1,0 +1,8 @@
+MicUp NR is based on papergray/MicUp (MIT).
+
+Its built-in learned-noise processor is libspecbleach v0.4.1 by Luciano Dato,
+licensed under LGPL-2.1-or-later. Oboe 1.8.1 is licensed under Apache-2.0.
+
+The matching source distribution supplied with this APK contains complete
+copyright, license, and corresponding-source material. See
+THIRD_PARTY_NOTICES.md in that distribution.

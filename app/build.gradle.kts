@@ -12,11 +12,12 @@ android {
     ndkVersion = "26.3.11579264"
 
     defaultConfig {
-        applicationId = "com.micplugin"
+        // Separate id so this custom build can live beside the upstream app.
+        applicationId = "com.micplugin.noiserepellent"
         minSdk = 26
         targetSdk = 34
         // Version injected by CI from git tag (e.g. v1.2.3 → 1.2.3)
-        val tagName = System.getenv("RELEASE_TAG") ?: "1.0.0"
+        val tagName = System.getenv("RELEASE_TAG") ?: "1.1.0"
         val cleanTag = tagName.removePrefix("v")
         val parts = cleanTag.split(".").mapNotNull { it.toIntOrNull() }
         versionCode = (parts.getOrElse(0){1} * 10000) +
@@ -38,7 +39,8 @@ android {
         }
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64", "armeabi-v7a")
+            // Target device (Ulefone Armor 28 Ultra) is ARM64.
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -74,7 +76,6 @@ android {
         compose = true
         aidl = true
         buildConfig = true
-        prefab = true          // Required: exposes Oboe CMake targets via Prefab AAR
     }
 
     composeOptions {
@@ -121,9 +122,6 @@ dependencies {
 
     // Navigation
     implementation(libs.navigation.compose)
-
-    // Audio (Oboe via prefab)
-    implementation(libs.oboe)
 
     // Kotlin
     implementation(libs.coroutines.android)

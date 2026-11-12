@@ -133,6 +133,7 @@ fun EffectCard(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    helpText: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
@@ -158,6 +159,10 @@ fun EffectCard(
                     letterSpacing = 1.5.sp,
                     modifier = Modifier.weight(1f),
                 )
+                if (helpText != null) {
+                    InfoButton(title = title, text = helpText)
+                    Spacer(Modifier.width(4.dp))
+                }
                 Switch(
                     checked  = enabled,
                     onCheckedChange = onToggle,
@@ -190,6 +195,7 @@ fun ParamSlider(
     unit: String = "",
     modifier: Modifier = Modifier,
     steps: Int = 0,
+    helpText: String? = null,
 ) {
     Column(modifier = modifier) {
         Row(
@@ -197,7 +203,18 @@ fun ParamSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment     = Alignment.CenterVertically,
         ) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = StudioColors.TextMuted, fontSize = 10.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StudioColors.TextMuted,
+                    fontSize = 10.sp,
+                )
+                if (helpText != null) {
+                    Spacer(Modifier.width(3.dp))
+                    InfoButton(title = label, text = helpText)
+                }
+            }
             Text(
                 text  = "%.1f%s".format(value, unit),
                 style = MaterialTheme.typography.labelSmall,
@@ -216,6 +233,47 @@ fun ParamSlider(
                 inactiveTrackColor = StudioColors.Border,
             ),
             modifier = Modifier.height(32.dp),
+        )
+    }
+}
+
+@Composable
+fun InfoButton(
+    title: String,
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    var visible by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { visible = true },
+        modifier = modifier.size(22.dp),
+    ) {
+        Text(
+            "?",
+            color = StudioColors.Accent,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+    }
+    if (visible) {
+        AlertDialog(
+            onDismissRequest = { visible = false },
+            containerColor = StudioColors.CardElevated,
+            title = { Text(title, color = StudioColors.TextPrimary) },
+            text = {
+                Text(
+                    text,
+                    color = StudioColors.TextMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { visible = false }) {
+                    Text("Got it", color = StudioColors.Accent)
+                }
+            },
         )
     }
 }
@@ -311,6 +369,7 @@ fun KnobWidget(
     valueRange: ClosedFloatingPointRange<Float>,
     size: Dp = 48.dp,
     unit: String = "",
+    helpText: String? = null,
 ) {
     val startAngle = 225f
     val sweepAngle = 270f
@@ -373,7 +432,12 @@ fun KnobWidget(
             fontSize = 8.sp,
             color = StudioColors.Accent,
         )
-        Text(label, fontSize = 7.sp, color = StudioColors.TextMuted)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontSize = 7.sp, color = StudioColors.TextMuted)
+            if (helpText != null) {
+                InfoButton(title = label, text = helpText)
+            }
+        }
     }
 }
 

@@ -40,6 +40,8 @@ object SoftwareLoopback {
         // Respect the persisted monitor on/off choice on (re)start, even before the UI loads.
         monitorEnabled = context.getSharedPreferences("micup_prefs", Context.MODE_PRIVATE)
             .getBoolean("monitor_enabled", true)
+        selectedDeviceId = context.getSharedPreferences("micup_prefs", Context.MODE_PRIVATE)
+            .getInt("output_device_id", -1)
 
         val minBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO, FORMAT).coerceAtLeast(4096)
@@ -89,6 +91,7 @@ object SoftwareLoopback {
         Log.i(TAG, "SoftwareLoopback started monitor=$monitorEnabled")
     }
 
+    @Suppress("DEPRECATION")
     fun stop() {
         running = false
         queue.clear()
@@ -100,8 +103,8 @@ object SoftwareLoopback {
         monitorTrack = null
         abandonAudioFocus()
         try {
-            @Suppress("DEPRECATION") audioManager?.mode = AudioManager.MODE_NORMAL
-            @Suppress("DEPRECATION") audioManager?.isSpeakerphoneOn = false
+            audioManager?.mode = AudioManager.MODE_NORMAL
+            audioManager?.isSpeakerphoneOn = false
         } catch (_: Exception) {}
         Log.i(TAG, "SoftwareLoopback stopped")
     }
@@ -151,6 +154,7 @@ object SoftwareLoopback {
                     AudioDeviceInfo.TYPE_WIRED_HEADSET     -> "Wired Headset"
                     AudioDeviceInfo.TYPE_WIRED_HEADPHONES  -> "Wired Headphones"
                     AudioDeviceInfo.TYPE_BLUETOOTH_SCO     -> "Bluetooth SCO"
+                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP    -> "Bluetooth Headphones"
                     AudioDeviceInfo.TYPE_BLE_HEADSET       -> "BLE Headset"
                     AudioDeviceInfo.TYPE_USB_HEADSET       -> "USB Headset"
                     else -> d.productName?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
@@ -203,7 +207,9 @@ object SoftwareLoopback {
                 outputs.firstOrNull {
                     it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET    ||
                     it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                    it.type == AudioDeviceInfo.TYPE_BLE_HEADSET      ||
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP   ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) ||
                     it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
                 } ?: outputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
             } else outputs.firstOrNull { it.id == selectedDeviceId }

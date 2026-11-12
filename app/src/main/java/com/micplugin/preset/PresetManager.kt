@@ -16,15 +16,36 @@ import javax.inject.Singleton
 
 @Serializable
 data class EffectState(
-    val gateEnabled:   Boolean = true,
+    val noiseRepellentEnabled: Boolean = true,
+    val noiseReduction: Float = 18f,
+    val noiseTonalReduction: Float = 18f,
+    val noiseOutputGain: Float = 10f,
+    val noiseSmoothing: Float = 35f,
+    val noiseSmoothingMode: Int = 3,
+    val noiseDfttStrength: Float = 1f,
+    val noiseSignalProtection: Float = 70f,
+    val noiseWhitening: Float = 0f,
+    val noiseSuppression: Float = 100f,
+    val noiseAggressiveness: Float = 0.5f,
+    val noiseProfileOffset: Float = 0f,
+    val noiseTonalProfileOffset: Float = 0f,
+    val noiseAdaptive: Boolean = false,
+    val noiseEstimatorMethod: Int = 0,
+    val noiseQualityMode: Int = 1,
+    val noiseCurveEnabled: Boolean = false,
+    val noiseCurveBands: List<Float> = List(10) { 0f },
+    val noiseResidualListen: Boolean = false,
+    val noiseTransientProtection: Boolean = true,
+
+    val gateEnabled:   Boolean = false,
     val gateThreshold: Float   = -50f,
     val gateAttack:    Float   = 5f,
     val gateRelease:   Float   = 150f,
 
-    val eqEnabled: Boolean     = true,
+    val eqEnabled: Boolean     = false,
     val eqBands:   List<Float> = List(10) { 0f },
 
-    val compEnabled:   Boolean = true,
+    val compEnabled:   Boolean = false,
     val compThreshold: Float   = -18f,
     val compRatio:     Float   = 4f,
     val compAttack:    Float   = 10f,
@@ -56,9 +77,15 @@ class PresetManager @Inject constructor(
         private const val TAG = "PresetManager"
         val BUILT_IN: List<Preset> = listOf(
             Preset(
+                name = "Stethoscope NR",
+                isBuiltIn = true,
+                effects = EffectState(),
+            ),
+            Preset(
                 name = "Clean Pass-Through",
                 isBuiltIn = true,
                 effects = EffectState(
+                    noiseRepellentEnabled = false,
                     gateEnabled  = false,
                     eqEnabled    = false,
                     compEnabled  = false,
@@ -70,6 +97,8 @@ class PresetManager @Inject constructor(
                 name = "Podcast Voice",
                 isBuiltIn = true,
                 effects = EffectState(
+                    noiseRepellentEnabled = false,
+                    gateEnabled     = true,
                     gateThreshold = -45f,
                     eqEnabled     = true,
                     eqBands       = List(10) { i -> if (i == 6 || i == 7) 3f else 0f }, // +3dB at 2k+4k
@@ -82,6 +111,10 @@ class PresetManager @Inject constructor(
                 name = "Deep Radio Voice",
                 isBuiltIn = true,
                 effects = EffectState(
+                    noiseRepellentEnabled = false,
+                    gateEnabled       = true,
+                    eqEnabled         = true,
+                    compEnabled       = true,
                     pitchEnabled   = true,
                     pitchSemitones = -2f,
                     eqBands        = List(10) { i -> when(i) { 0 -> -6f; 4 -> 3f; else -> 0f } },
@@ -93,6 +126,9 @@ class PresetManager @Inject constructor(
                 name = "Telephone Effect",
                 isBuiltIn = true,
                 effects = EffectState(
+                    noiseRepellentEnabled = false,
+                    gateEnabled = true,
+                    eqEnabled = true,
                     // Bandpass 300Hz–3.4kHz: cut lows + highs
                     eqBands = List(10) { i -> when(i) { 0 -> -12f; 1 -> -8f; 8 -> -10f; 9 -> -15f; else -> 0f } },
                     reverbEnabled = false,
@@ -105,6 +141,9 @@ class PresetManager @Inject constructor(
                 name = "Studio Vocal",
                 isBuiltIn = true,
                 effects = EffectState(
+                    noiseRepellentEnabled = false,
+                    gateEnabled     = true,
+                    eqEnabled       = true,
                     gateThreshold = -40f,
                     eqBands       = List(10) { i -> when(i) { 0 -> -4f; 6 -> 2f; 7 -> 1f; else -> 0f } },
                     compEnabled   = true,
